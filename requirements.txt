@@ -1,0 +1,8 @@
+# Núcleo
+pandas>=2.0
+duckdb>=0.9
+lxml>=5.0          # parser XML rápido
+plotly>=5.16       # gráficos interactivos
+gradio>=4.0        # interfaz web
+
+# zoneinfo viene en la librería estándar (>=3.9), no necesitas instalarla
