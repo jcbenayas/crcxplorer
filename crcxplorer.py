@@ -75,38 +75,35 @@ def _colorize_alarm(row) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 FileLike = Union[str, Path, bytes, io.BufferedIOBase, dict]
 
-def _open_maybe_gz(path: Path, mode: str = "rb"):
-    return gzip.open(path, mode) if path.suffix == ".gz" else open(path, mode)
-
 def _read_bytes(file_obj: FileLike) -> bytes:
     """Lee bytes del archivo admitiendo:
-    • objetos bytes / bytearray
-    • dict FileData de Gradio   {"data": …, "path": …}
-    • rutas str / Path (xml o xml.gz)
-    • file‑like ya abierto
+    • bytes / bytearray
+    • dict FileData de Gradio  {"data":…, "path":…}
+    • rutas str / Path (cualquier nombre, .gz o no)
+    • file-like ya abierto
 
-    Si los primeros dos bytes son 1f 8b (cabecera gzip) se descomprime al vuelo.
+    Si los dos primeros bytes son 1F 8B (cabecera gzip) se descomprime.
     """
-    # ── 1) bytes o bytearray ───────────────────────────────────────
+    # ── 1) bytes o bytearray ──────────────────────────────────────
     if isinstance(file_obj, (bytes, bytearray)):
         data = bytes(file_obj)
         return gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data
 
-    # ── 2) dict FileData (Gradio) ─────────────────────────────────
+    # ── 2) dict FileData (Gradio) ────────────────────────────────
     if isinstance(file_obj, dict):
         if file_obj.get("data"):
             data = file_obj["data"]
             return gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data
-        # Si solo hay ruta
         file_obj = file_obj.get("path") or file_obj.get("name")
 
-    # ── 3) ruta en disco (str/Path) ───────────────────────────────
+    # ── 3) ruta en disco (str / Path) ────────────────────────────
     if isinstance(file_obj, (str, Path)):
         path = Path(file_obj)
-        with _open_maybe_gz(path) as fh:
-            return fh.read()
+        with path.open("rb") as fh:
+            data = fh.read()
+            return gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data
 
-    # ── 4) file‑like abierto ──────────────────────────────────────
+    # ── 4) file-like abierto ─────────────────────────────────────
     data = file_obj.read()
     return gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data
 
@@ -308,8 +305,11 @@ def cb_plot(files, tren_ref):
 # ──────────────────────────────────────────────────────────────────────────────
 with gr.Blocks(title="CRC Explorer") as demo:
     gr.Markdown("# CRCXplorer – Análisis de ficheros envioMOM")
-    files = gr.Files(label="Ficheros xml o xml.gz", file_count="multiple",
-                     file_types=[".xml", ".gz"])
+    files = gr.Files(
+        label="Ficheros xml o xml.gz",
+        file_count="multiple",
+        file_types=None   # sin filtro → permite .gz y nombres sin extensión
+    )
 
     with gr.Tabs():
         with gr.TabItem("Trenes"):
