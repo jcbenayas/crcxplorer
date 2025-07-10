@@ -15,6 +15,8 @@ from lxml import etree
 from datetime import timezone
 from zoneinfo import ZoneInfo
 import re
+os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Filtrado booleano simple  AND / OR / NOT  (subcadenas, sin regex)
 # ──────────────────────────────────────────────────────────────────────────────
