@@ -1,30 +1,30 @@
+# ────────────────────────────────────────────────────────────────────────────────
+# Imagen ligera basada en Python 3.11
 FROM python:3.11-slim
 
-Instalamos dependencias del sistema (compilar lxml, etc.)
+# 1. Instalar dependencias del sistema necesarias para matplotlib / fontconfig
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        fontconfig \
+        && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && 
-apt-get install -y –no-install-recommends build-essential && 
-rm -rf /var/lib/apt/lists/*
-
-Creamos un usuario no-root para mayor seguridad
-
+# 2. Crear usuario no-root para ejecutar la app
 RUN useradd -m crcxplorer
 WORKDIR /home/crcxplorer
+# Matplotlib necesita un directorio de caché escribible
+ENV MPLCONFIGDIR=/home/crcxplorer/.cache/matplotlib
+RUN mkdir -p $MPLCONFIGDIR && chown -R crcxplorer:crcxplorer $MPLCONFIGDIR
 
-Copiamos requirements y lo instalamos
-
+# 3. Copiar código y dependencias
 COPY requirements.txt .
-RUN pip install –no-cache-dir -r requirements.txt
-
-Copiamos la aplicación
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY crcxplorer.py .
 
-Puerto por defecto que usa Gradio
-
+# 4. Puerto por defecto de Gradio
 EXPOSE 7860
 
-Ejecutamos como usuario seguro
-
+# 5. Comando de arranque
 USER crcxplorer
-CMD [“python”, “crcxplorer.py”]
+CMD ["python", "crcxplorer.py"]
