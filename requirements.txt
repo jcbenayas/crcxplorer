@@ -1,8 +1,12 @@
-# Núcleo
-pandas>=2.0
-duckdb>=0.9
-lxml>=5.0          # parser XML rápido
-plotly>=5.16       # gráficos interactivos
-gradio>=4.0        # interfaz web
+# Allow pip to resolve the newest compatible versions (major series pinned)
+pandas>=2.3,<3
+numpy>=1.26,<2
+duckdb>=1.2,<2
+plotly>=5.19,<6
+matplotlib>=3.8,<4
+gradio>=5,<6
+gradio_client>=1.5,<2
+lxml>=5.4,<6
+typing_extensions>=4.0
+tzdata>=2024.1
 
-# zoneinfo viene en la librería estándar (>=3.9), no necesitas instalarla

@@ -4,6 +4,7 @@ Analizador interactivo de ficheros **envioMOM\*.xml(.gz)**.
 
 - **Trenes**: muestra el paso de trenes por circuitos TrackCircuit, con orden cronológico y gráfico interactivo.
 - **Alarmas**: lista de Alarm filtrable con operador lógico simple (`AND` / `OR` / `NOT`) y salida coloreada.
+- **Velocidades**: calcula el perfil de velocidad a partir de un CSV de puntos de control.
 
 ---
 
@@ -17,6 +18,10 @@ docker build -t crcxplorer .
 docker run -p 7860:7860 crcxplorer
 # Abre http://localhost:7860
 ```
+> **Nota:** el contenedor instala las dependencias desde  
+> `requirements-pinned.txt` (versiones probadas) o  
+> `requirements-latest.txt` (versiones recientes, mismo major).  
+> Cámbialo en el `Dockerfile` según prefieras estabilidad o novedades.
 
 ---
 
@@ -26,7 +31,8 @@ docker run -p 7860:7860 crcxplorer
 2. **Pestaña Trenes** – selecciona un tren de referencia.  
    - El eje Y sigue exactamente el orden de circuitos de ese tren.  
    - Los demás trenes aparecen superpuestos.
-3. **Pestaña Alarmas** – escribe filtros como:
+3. **Pestaña Velocidades** – sube un CSV o pégalo en el cuadro; el contenido del fichero se copia automáticamente al texto para que puedas editarlo antes de calcular el perfil.
+4. **Pestaña Alarmas** – escribe filtros como:
 
    * `CTC & ROUTE`
    * `MANDOS | RBC`
@@ -50,20 +56,16 @@ python crcxplorer.py
 ## Requisitos principales
 
 ```
-pandas>=2.0
-duckdb>=0.9
-lxml>=5.0
-plotly>=5.16
-gradio>=4.0
+pandas>=2.3,<3
+duckdb>=1.2,<2
+lxml>=5.4,<6
+plotly>=5.19,<6
+gradio>=5,<6
+typing_extensions>=4.0
+tzdata>=2024.1
 ```
 
 *(La librería estándar `zoneinfo` se usa para la zona horaria.)*
-
----
-
-## Captura de pantalla
-
-![Pantalla CRCXplorer](assets/screenshot.png)
 
 ---
 
