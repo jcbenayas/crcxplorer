@@ -8,6 +8,8 @@ from typing import Union, List, Tuple, Dict
 from datetime import datetime
 import duckdb, pandas as pd
 import plotly.express as px
+import numpy as np
+import matplotlib.pyplot as plt
 import gradio as gr
 from lxml import etree
 from datetime import timezone
@@ -245,25 +247,27 @@ def _plot(df: pd.DataFrame, ref_circs: List[str]) -> px.line:
         labels={"time": "Hora", "tcid": "Circuito", "train": "Tren"},
     )
 
-    # ── eje-Y exactamente en el orden del tren de referencia ──
+    # ── eje‑Y exactamente en el orden del tren de referencia ──
+    n_cats = len(ref_circs)
     fig.update_yaxes(
         autorange="reversed",
         categoryorder="array",
         categoryarray=ref_circs,
+        dtick=1,                    # paso uniforme
+        range=[n_cats - 1, 0],      # sin ½‐paso adicional → todas las filas igual
     )
 
-    # Altura dinámica (mín 300 px, 25 px por circuito)
+    # ── distribución y leyenda ────────────────────────────────────────────
     fig.update_layout(
         height=max(300, len(ref_circs) * 25),
         title=None,
         legend=dict(
-            orientation="h",
-            y=1.08,     # arriba del área del gráfico
-            x=0,
-            xanchor="left",
+            orientation="v",
+            y=0.5,  yanchor="middle",
+            x=1.05, xanchor="left",   # un poco más fuera
             font=dict(size=10),
         ),
-        margin=dict(t=55, b=30, l=60, r=20),
+        margin=dict(t=50, b=30, l=60, r=200),
     )
     return fig
 
@@ -301,10 +305,181 @@ def cb_plot(files, tren_ref):
     return "", fig
 
 # ──────────────────────────────────────────────────────────────────────────────
+# CALLBACK Velocidades
+# ──────────────────────────────────────────────────────────────────────────────
+def cb_velocidades(files, csv_text, csv_file, dir_mad):
+    if not files:
+        return "⚠️ Suba al menos un fichero MOM.", None, None, None
+
+    # ── leer puntos (tcid, distancia en metros) ──────────────────────────────
+    puntos_df = None
+    try:
+        if csv_text:
+            import io
+            puntos_df = pd.read_csv(io.StringIO(csv_text),
+                                    header=None, names=["tcid", "dist"])
+        elif csv_file:
+            puntos_df = pd.read_csv(csv_file.name, header=None,
+                                    names=["tcid", "dist"])
+    except Exception as e:
+        return f"⚠️ Error leyendo CSV de puntos: {e}", None, None, None
+
+    if puntos_df is None or puntos_df.empty:
+        return "⚠️ Introduzca o suba un CSV con puntos (tcid,dist).", None, None, None
+
+    # Distancia a numérica y ordenar
+    puntos_df["dist"] = pd.to_numeric(puntos_df["dist"], errors="coerce")
+    puntos_df.dropna(subset=["dist"], inplace=True)
+    if puntos_df.empty:
+        return "⚠️ Todas las distancias son inválidas.", None, None, None
+    puntos_df.sort_values("dist", inplace=True)
+    orden_tcid = puntos_df["tcid"].tolist()
+    dist_dict = dict(zip(puntos_df["tcid"], puntos_df["dist"]))
+
+    # ── parsear ficheros MOM ─────────────────────────────────────────────────
+    df = _parse_files(files if isinstance(files, list) else [files])
+
+    # Solo trenes que pasen por TODOS los tcid seleccionados
+    trenes_validos = []
+    for tr in df["train"].unique():
+        tcids_tr = set(df[df["train"] == tr]["tcid"])
+        if all(t in tcids_tr for t in orden_tcid):
+            trenes_validos.append(tr)
+    if not trenes_validos:
+        return "⚠️ Ningún tren pasa por todos los puntos seleccionados.", None, None, None
+
+    # ── calcular velocidades ────────────────────────────────────────────────
+    vel_rows = []
+    for tr in trenes_validos:
+        dft = (df[df["train"] == tr]
+                 .sort_values("time")
+                 .drop_duplicates("tcid"))
+        # Mantener sólo los puntos solicitados
+        dft = dft[dft["tcid"].isin(orden_tcid)]
+        dft["dist"] = dft["tcid"].map(dist_dict)
+        for i in range(1, len(dft)):
+            tc_prev  = dft.iloc[i-1]["tcid"]
+            tc_curr  = dft.iloc[i]["tcid"]
+            dist_prev = dft.iloc[i-1]["dist"]
+            dist_curr = dft.iloc[i]["dist"]
+
+            # Mid‑point para alinear ambos sentidos
+            dist_mid = (dist_prev + dist_curr) / 2.0
+
+            dist_delta = dist_curr - dist_prev          # Δdist (m)
+            if dir_mad:
+                dist_delta = abs(dist_delta)
+            time_delta = (dft.iloc[i]["time"] - dft.iloc[i-1]["time"]).total_seconds()
+            if time_delta == 0:
+                vel = np.nan
+            else:
+                vel = abs(dist_delta) / time_delta * 3.6   # km/h
+
+            seg_label = f"{tc_prev}-{tc_curr}"
+
+            vel_rows.append({
+                "train": tr,
+                "segment": seg_label,
+                "dist": dist_mid,
+                "vel": vel
+            })
+
+    vel_df = pd.DataFrame(vel_rows)
+    if vel_df.empty:
+        return "⚠️ No se pudieron calcular velocidades.", None, None, None
+
+    # Asegurar que la columna vel sea numérica continua
+    plot_df = vel_df.copy()
+    plot_df["vel"] = pd.to_numeric(plot_df["vel"], errors="coerce")
+    plot_df["train"] = plot_df["train"].astype(str)
+    plot_df["dist"] = pd.to_numeric(plot_df["dist"], errors="coerce")
+    plot_df["segment"] = plot_df["segment"].astype(str)
+    plot_df["dist_km"] = plot_df["dist"] / 1000.0
+
+    # Etiqueta para cada distancia (usamos el primer label encontrado)
+    label_map = {row["dist"]: row["segment"] for row in vel_df.to_dict("records")}
+
+    # Media por distancia intermedia
+    avg_df = (vel_df.groupby("dist", as_index=False)
+                      .agg(vel=("vel", "mean"), segment=("segment", "first"))
+             .assign(train="Media"))
+
+    # ── construir figura matplotlib ────────────────────────────────────────
+    line_df = pd.concat([vel_df, avg_df], ignore_index=True)
+    line_df["dist_km"] = line_df["dist"] / 1000.0
+    line_df = line_df.sort_values(["train", "dist_km"])
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    for train, grp in line_df.groupby("train"):
+        color = "k" if train == "Media" else None
+        ax.plot(grp["dist_km"], grp["vel"], marker="o", label=train, color=color)
+
+    # Eje X en km con etiquetas de segmento
+    unique_dists = sorted(label_map.keys())
+    xticks_km = [d / 1000.0 for d in unique_dists]
+    xtick_labels = [label_map[d] for d in unique_dists]
+    ax.set_xticks(xticks_km)
+    ax.set_xticklabels(xtick_labels, rotation=90)
+    ax.set_xlabel("Segmento (km medio)")
+    ax.set_ylabel("Velocidad (km/h)")
+    ax.grid(True, which="both", linestyle="--", linewidth=0.5)
+    ax.legend(title="Tren")
+    fig.tight_layout()
+
+    # Tabla para inspeccionar los datos representados
+    table_df = line_df.rename(columns={
+        "train": "Tren",
+        "segment": "Segmento",
+        "dist_km": "Dist (km)",
+        "vel": "Vel (km/h)"
+    })[["Tren", "Segmento", "Dist (km)", "Vel (km/h)"]]
+
+    # Guardar CSV temporal para descarga
+    import uuid, os, tempfile
+    tmp_csv = os.path.join(tempfile.gettempdir(), f"velocidades_{uuid.uuid4().hex}.csv")
+    table_df.to_csv(tmp_csv, index=False, encoding="utf-8")
+
+    return "", fig, table_df, tmp_csv
+
+
+# CALLBACK para copiar CSV al textbox
+def cb_csv_to_text(csv_file):
+    """
+    Cuando el usuario sube un CSV, copia su contenido al cuadro de texto
+    para que se pueda revisar o editar antes de calcular velocidades.
+    """
+    if not csv_file:
+        return gr.update(value="")
+    try:
+        # Compatibilidad Gradio (<5 dict, ≥5 FileData)
+        file_path = None
+        if isinstance(csv_file, dict):
+            file_path = csv_file.get("path") or csv_file.get("name")
+        elif hasattr(csv_file, "path"):
+            file_path = csv_file.path
+        elif hasattr(csv_file, "name"):
+            file_path = csv_file.name
+        if file_path and Path(file_path).exists():
+            return gr.update(value=Path(file_path).read_text(encoding="utf-8", errors="replace"))
+        # Fallback: leer del file‑like
+        if hasattr(csv_file, "read"):
+            csv_file.seek(0)
+            return gr.update(value=csv_file.read().decode("utf-8", errors="replace"))
+    except Exception as e:
+        return gr.update(value=f"⚠️ Error leyendo CSV: {e}")
+
+# ──────────────────────────────────────────────────────────────────────────────
 # UI
 # ──────────────────────────────────────────────────────────────────────────────
 with gr.Blocks(title="CRC Explorer") as demo:
     gr.Markdown("# CRCXplorer – Análisis de ficheros envioMOM")
+    # Ajuste visual para Plotly: modebar arriba‑izquierda y sin wrap
+    gr.HTML("""
+    <style>
+    .modebar-container {left: 0 !important; right: auto !important;}
+    .modebar {flex-wrap: nowrap !important;}
+    </style>
+    """)
     files = gr.Files(
         label="Ficheros xml o xml.gz",
         file_count="multiple",
@@ -331,9 +506,37 @@ with gr.Blocks(title="CRC Explorer") as demo:
                 outputs=out_alarm,
             )
 
+        with gr.TabItem("Velocidades"):
+            with gr.Row():
+                csv_file = gr.File(
+                    label="Subir CSV de puntos",
+                    file_types=[".csv"],
+                    scale=1,
+                )
+                csv_text = gr.Textbox(
+                    label="Puntos (csv: cv_id,dist_metros)",
+                    lines=5,
+                    placeholder="CV-001,0\\nCV-002,250\\n...",
+                    scale=2,
+                )
+                # Al subir CSV → volcar contenido al textbox
+                csv_file.change(cb_csv_to_text, inputs=csv_file, outputs=csv_text)
+            dir_mad = gr.Checkbox(label="Dirección Madrid", value=False)
+            btn_vel = gr.Button("Calcular velocidades")
+            out_msg_vel = gr.Markdown()
+            out_plot_vel = gr.Plot(label="Perfil de velocidad")
+            out_df_vel   = gr.Dataframe(headers=["Tren","Segmento","Dist (km)","Vel (km/h)"], interactive=False)
+            out_csv_vel  = gr.File(label="Descargar CSV")
+            btn_vel.click(
+                cb_velocidades,
+                inputs=[files, csv_text, csv_file, dir_mad],
+                outputs=[out_msg_vel, out_plot_vel, out_df_vel, out_csv_vel],
+            )
+
     gr.Markdown("---\nSube uno o varios `envioMOM*.xml(.gz)` y explora. Las pestañas:\n"
                 "• **Trenes** – recorrido de circuitos\n"
-                "• **Alarmas** – filtra mensajes Alarm con AND/OR/NOT.")
+                "• **Alarmas** – filtra mensajes Alarm con AND/OR/NOT.\n"
+                "• **Velocidades** – calcular perfiles de velocidad entre puntos seleccionados.")
     
 if __name__ == "__main__":
     # Importante para Docker
