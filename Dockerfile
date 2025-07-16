@@ -23,8 +23,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY crcxplorer.py .
 
 # 4. Puerto por defecto de Gradio
-EXPOSE 7860
+EXPOSE 7862
 
 # 5. Comando de arranque
 USER crcxplorer
-CMD ["python", "crcxplorer.py"]
+ENV PYTHONUNBUFFERED=1
+CMD ["python", "-u", "crcxplorer.py"]

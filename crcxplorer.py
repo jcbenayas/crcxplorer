@@ -543,5 +543,8 @@ with gr.Blocks(title="CRC Explorer") as demo:
                 "• **Velocidades** – calcular perfiles de velocidad entre puntos seleccionados.")
     
 if __name__ == "__main__":
-    # Importante para Docker
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=7862,
+        debug=True          # sigue mostrando trazas
+    )
