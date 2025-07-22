@@ -16,9 +16,9 @@ Analizador interactivo de ficheros **envioMOM\*.xml(.gz)**.
 # Construir imagen (contexto actual)
 docker build -t crcxplorer .
 
-# Ejecutar (puerto 7860 en contenedor → 7860 en host)
-docker run -p 7860:7860 crcxplorer
-# Abre http://localhost:7860
+# Ejecutar (puerto 7862 en contenedor → 7862 en host)
+docker run -p 7862:7862 crcxplorer
+# Abre http://localhost:7862
 ```
 > **Nota:** el contenedor instala las dependencias desde  
 > `requirements-pinned.txt` (versiones probadas) o  
