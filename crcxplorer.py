@@ -5,7 +5,7 @@ from __future__ import annotations
 import gzip, io, inspect, struct
 from pathlib import Path
 from typing import Union, List, Tuple, Dict
-from datetime import datetime
+from datetime import datetime, timedelta
 import duckdb, pandas as pd
 import plotly.express as px
 import numpy as np
@@ -18,6 +18,19 @@ import re
 import os
 
 os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Helper: convertir epoch‑milliseconds → datetime con µs exactos
+# Evita la pérdida de precisión por float
+# ──────────────────────────────────────────────────────────────────────────────
+def _dt_from_ms(ms_val: int, tz=timezone.utc, local_tz: str = "Europe/Madrid") -> datetime:
+    """
+    Convierte milisegundos desde época Unix a datetime con microsegundos,
+    sin pasar por float. Devuelve en la zona horaria indicada (`local_tz`).
+    """
+    secs, millis = divmod(int(ms_val), 1_000)
+    dt = datetime.fromtimestamp(secs, tz=tz) + timedelta(milliseconds=millis)
+    return dt.astimezone(ZoneInfo(local_tz)) if local_tz else dt
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Filtrado booleano simple  AND / OR / NOT  (subcadenas, sin regex)
@@ -75,6 +88,27 @@ def _colorize_alarm(row) -> str:
             f"<span style='color:{_ALARM_COLORS[i%4]};font-family:monospace'>{_pad(p, w)}</span>"
         )
     return "".join(html_parts)
+
+def _colorize_switch(row) -> str:
+    """Devuelve HTML monoespaciado: [hora.ms] [id] [posición] [enclavado]"""
+    ts  = row["time"].strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    sid = row["id"]
+    pos = row["posicion"]
+    enc = row["enclavado"]
+
+    widths = [30, 25, 20, 15]              # más separación
+    parts  = [ts, sid, pos, enc]
+    colors = ["#ffa500", "#1e90ff", "#00ced1", "#adff2f"]
+
+    def pad(t, w):
+        txt = (t[:w]) if len(t) > w else t.ljust(w)
+        return txt.replace(" ", "&nbsp;")
+
+    html = [
+        f"<span style='font-family:monospace;color:{colors[i]}'>{pad(p, w)}</span>"
+        for i, (p, w) in enumerate(zip(parts, widths))
+    ]
+    return "".join(html)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # UTILIDADES DE FICHERO  (acepta .gz ó plano)
@@ -162,9 +196,7 @@ def _iter_trackcircuit(xml_bytes: bytes):
             # Hora REAL del evento (TrackCircuit/TimeStampValue) en ms UTC
             ts_attr = elem.find(".//TrackCircuit/TimeStampValue")
             ts_raw = int(ts_attr.get("value"))
-            # Pásala a la zona deseada (UTC+2; cambio automático verano/invierno)
-            ts = datetime.fromtimestamp(ts_raw / 1000.0, tz=timezone.utc).astimezone(ZoneInfo("Europe/Madrid"))
-
+            ts = _dt_from_ms(ts_raw)
             yield ts, tc_id, train_id
         finally:
             elem.clear()
@@ -193,9 +225,7 @@ def _iter_alarm(xml_bytes: bytes):
             if al is None:
                 elem.clear(); continue
             ts_raw = int(al.find(".//Timestamp").get("value"))
-            ts = datetime.fromtimestamp(ts_raw / 1000.0, tz=timezone.utc).astimezone(
-                ZoneInfo("Europe/Madrid")
-            )
+            ts = _dt_from_ms(ts_raw)
             ev = al.find(".//EventType").get("value")
             prm_el = al.find(".//Parameters/Parameter")
             msg = prm_el.get("value") if prm_el is not None else ""
@@ -215,6 +245,125 @@ def _parse_files(file_objs: List[FileLike]) -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=["time", "tcid", "train"])
     df.sort_values("time", inplace=True)
     return df
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PARSER XML – Switch  (desvíos)
+# ──────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# PARSER XML – Switch  (desvíos)
+# ──────────────────────────────────────────────────────────────────────────────
+def _iter_switch(xml_bytes: bytes):
+    """
+    Yield → (ts, posicion, enclavado, raw)
+        ts         : datetime con milisegundos
+        posicion   : 'derecha' | 'izquierda' | 'movimiento'
+        enclavado  : 'enclavado' | 'no enclavado'
+        raw        : texto simple para filtrado
+    """
+    xml_bytes = _strip_to_xml(xml_bytes)
+    xml_bytes = b"<root>" + xml_bytes + b"</root>"
+    ctx = etree.iterparse(
+        io.BytesIO(xml_bytes),
+        events=("end",),
+        tag="Message",
+        recover=True,
+        huge_tree=True,
+    )
+    for _ev, elem in ctx:
+        try:
+            if elem.findtext("Header/ContentType") != "Switch":
+                elem.clear(); continue
+
+            sw = elem.find(".//Switch")
+            if sw is None:
+                elem.clear(); continue
+
+            # ── timestamp ───────────────────────────────────────────────
+            ts_raw = int(elem.findtext("Header/Timestamp"))
+            ts = _dt_from_ms(ts_raw)
+
+            # ── nombre del desvío / Id --────────────────────────────────
+            switch_id = sw.findtext("Id") or "UNKNOWN"
+
+            # ── posición ────────────────────────────────────────────────
+            chk = sw.find(".//CheckedPosition")
+            val, pos_attr = chk.get("value"), chk.get("position")
+            if val == "YES" and pos_attr == "+":
+                posicion = "derecha"
+            elif val == "YES" and pos_attr == "-":
+                posicion = "izquierda"
+            else:
+                posicion = "movimiento"
+
+            # ── enclavado ───────────────────────────────────────────────
+            enc_el = sw.find(".//Interlocked")
+            enclavado = "enclavado" if enc_el is not None and enc_el.get("value") == "YES" else "no enclavado"
+
+            raw = f"{switch_id} {posicion} {enclavado}"
+            yield ts, switch_id, posicion, enclavado, raw
+        finally:
+            elem.clear()
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PARSER XML – Signal  (señales)
+# ──────────────────────────────────────────────────────────────────────────────
+def _iter_signal(xml_bytes: bytes):
+    """
+    Yield → (ts, id, indicacion, raw)
+        ts          : datetime con milisegundos
+        id          : nombre de la señal (ej. LAV6.TRO.1795S)
+        indicacion  : texto de <Indication>
+        raw         : texto simple para filtrado
+    """
+    xml_bytes = _strip_to_xml(xml_bytes)
+    xml_bytes = b"<root>" + xml_bytes + b"</root>"
+    ctx = etree.iterparse(
+        io.BytesIO(xml_bytes),
+        events=("end",),
+        tag="Message",
+        recover=True,
+        huge_tree=True,
+    )
+    for _ev, elem in ctx:
+        try:
+            if elem.findtext("Header/ContentType") != "Signal":
+                elem.clear(); continue
+
+            sig = elem.find(".//Signal")
+            if sig is None:
+                elem.clear(); continue
+
+            ts_raw = int(elem.findtext("Header/Timestamp"))
+            ts = _dt_from_ms(ts_raw)
+
+            signal_id  = sig.findtext("Id") or "UNKNOWN"
+            indicacion = sig.findtext(".//Indication") or ""
+
+            raw = f"{signal_id} {indicacion}"
+            yield ts, signal_id, indicacion, raw
+        finally:
+            elem.clear()
+
+# Colores para Señales
+def _colorize_signal(row) -> str:
+    """Devuelve HTML monoespaciado: [hora.ms] [id] [indicación]"""
+    ts  = row["time"].strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    sid = row["id"]
+    ind = row["indicacion"]
+
+    widths = [30, 25, 40]
+    parts  = [ts, sid, ind]
+    colors = ["#ffa500", "#1e90ff", "#4caf50"]
+
+    def pad(t, w):
+        txt = (t[:w]) if len(t) > w else t.ljust(w)
+        return txt.replace(" ", "&nbsp;")
+
+    html = [
+        f"<span style='font-family:monospace;color:{colors[i]}'>{pad(p, w)}</span>"
+        for i, (p, w) in enumerate(zip(parts, widths))
+    ]
+    return "".join(html)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FUNCIONES DE NEGOCIO
@@ -250,6 +399,8 @@ def _plot(df: pd.DataFrame, ref_circs: List[str]) -> px.line:
         markers=True,
         labels={"time": "Hora", "tcid": "Circuito", "train": "Tren"},
     )
+    # Formato eje‑X con ms (Plotly %L = milliseconds)
+    fig.update_xaxes(tickformat="%H:%M:%S.%L")
 
     # ── eje‑Y exactamente en el orden del tren de referencia ──
     n_cats = len(ref_circs)
@@ -275,6 +426,7 @@ def _plot(df: pd.DataFrame, ref_circs: List[str]) -> px.line:
     )
     return fig
 
+
 # ──────────────────────────────────────────────────────────────────────────────
 # CALLBACKS GRADIO
 # ──────────────────────────────────────────────────────────────────────────────
@@ -294,19 +446,93 @@ def cb_alarmas(files, filtro_txt):
         return "⚠️ Ninguna alarma coincide con el filtro."
     html_lines = [_colorize_alarm(r) for _, r in df.iterrows()]
     return "<br>".join(html_lines)
+
+def cb_switch(files, filtro_txt):
+    """Filtrado booleano (AND/&  OR/|  NOT/!) para desvíos."""
+    if not files:
+        return "⚠️ Suba un fichero."
+    rows = []
+    for fo in (files if isinstance(files, list) else [files]):
+        raw = _read_bytes(fo)
+        rows.extend(_iter_switch(raw))
+    if not rows:
+        return "⚠️ No se encontraron desvíos."
+
+    df = pd.DataFrame(rows, columns=["time", "id", "posicion", "enclavado", "raw"])
+    mask = _build_mask(df, filtro_txt or "", col="raw")
+    df = df[mask]
+    if df.empty:
+        return "⚠️ Ningún desvío coincide con el filtro."
+
+    html_lines = [_colorize_switch(r) for _, r in df.iterrows()]
+    return "<br>".join(html_lines)
+
+# Callback para señales
+def cb_signal(files, filtro_txt):
+    """Filtrado booleano (AND/&  OR/|  NOT/!) para señales."""
+    if not files:
+        return "⚠️ Suba un fichero."
+    rows = []
+    for fo in (files if isinstance(files, list) else [files]):
+        raw = _read_bytes(fo)
+        rows.extend(_iter_signal(raw))
+    if not rows:
+        return "⚠️ No se encontraron señales."
+
+    df = pd.DataFrame(rows, columns=["time", "id", "indicacion", "raw"])
+    mask = _build_mask(df, filtro_txt or "", col="raw")
+    df = df[mask]
+    if df.empty:
+        return "⚠️ Ninguna señal coincide con el filtro."
+
+    html_lines = [_colorize_signal(r) for _, r in df.iterrows()]
+    return "<br>".join(html_lines)
+
 def cb_update_trenes(files):
     if not files: return gr.update(choices=[], value=None)
     df = _parse_files(files if isinstance(files, list) else [files])
     return gr.update(choices=_trenes_de_referencia(df), value=None)
 
-def cb_plot(files, tren_ref):
-    if not files: return "⚠️ Suba un fichero.", None
+def cb_update_circuitos(files, tren_ref):
+    """
+    Devuelve la lista de circuitos (tcid) recorridos por el tren seleccionado,
+    todos marcados por defecto. Si no hay tren, lista vacía.
+    """
+    if not files or not tren_ref:
+        return gr.update(choices=[], value=[])
     df = _parse_files(files if isinstance(files, list) else [files])
-    if not tren_ref: return "⚠️ Seleccione un tren.", None
-    ref_c = _circuitos_de_tren(df, tren_ref)
-    if not ref_c: return f"⚠️ El tren {tren_ref} no pasa por circuitos válidos.", None
+    circs = _circuitos_de_tren(df, tren_ref)
+    return gr.update(choices=circs, value=circs)
+
+def cb_plot(files, tren_ref, circs_sel):
+    """
+    Genera la gráfica de trenes filtrando por los circuitos seleccionados.
+    Si el usuario no selecciona ninguno, se usan todos los del tren de referencia.
+    """
+    if not files:
+        return "⚠️ Suba un fichero.", None
+    df = _parse_files(files if isinstance(files, list) else [files])
+    if not tren_ref:
+        return "⚠️ Seleccione un tren.", None
+
+    # Todos los circuitos por los que pasa el tren (orden temporal 1ª vez)
+    all_circs = _circuitos_de_tren(df, tren_ref)
+    if not all_circs:
+        return f"⚠️ El tren {tren_ref} no pasa por circuitos válidos.", None
+
+    # Usar selección del usuario si existe; si no, todos
+    if not circs_sel:
+        ref_c = all_circs
+    else:
+        sel_set = set(circs_sel)
+        ref_c = [c for c in all_circs if c in sel_set]
+
+    if not ref_c:
+        return "⚠️ Seleccione al menos un punto de control.", None
+
     fig = _plot(df, ref_c)
     return "", fig
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # CALLBACK Velocidades
@@ -492,13 +718,31 @@ with gr.Blocks(title="CRC Explorer") as demo:
 
     with gr.Tabs():
         with gr.TabItem("Trenes"):
-            tren_sel = gr.Dropdown(label="Tren de referencia (muestra circuitos)", choices=[])
+            # Selección de tren de referencia (ninguno por defecto)
+            tren_sel = gr.Dropdown(
+                label="Tren de referencia (muestra circuitos)",
+                choices=[],
+                value=None,
+                interactive=True,
+            )
             files.change(cb_update_trenes, inputs=files, outputs=tren_sel)
+
+            # Circuitos que recorre el tren seleccionado (multiselección; todos marcados por defecto)
+            circuit_sel = gr.Dropdown(
+                label="Puntos de control / Circuitos",
+                choices=[],
+                value=[],
+                multiselect=True,
+                interactive=True,
+            )
+            # Actualizar lista de circuitos cuando cambien ficheros o tren
+            tren_sel.change(cb_update_circuitos, inputs=[files, tren_sel], outputs=circuit_sel)
+            files.change(cb_update_circuitos, inputs=[files, tren_sel], outputs=circuit_sel)
 
             btn = gr.Button("Generar gráfico")
             out_msg = gr.Markdown()
             out_plot = gr.Plot()
-            btn.click(cb_plot, inputs=[files, tren_sel], outputs=[out_msg, out_plot])
+            btn.click(cb_plot, inputs=[files, tren_sel, circuit_sel], outputs=[out_msg, out_plot])
 
         with gr.TabItem("Alarmas"):
             filtro_alarm = gr.Text(label="Filtro (AND/&  OR/|  NOT/!)")
@@ -508,6 +752,27 @@ with gr.Blocks(title="CRC Explorer") as demo:
                 cb_alarmas,
                 inputs=[files, filtro_alarm],
                 outputs=out_alarm,
+            )
+        
+
+        with gr.TabItem("Desvíos"):
+            filtro_switch = gr.Text(label="Filtro (AND/&  OR/|  NOT/!)")
+            btn_switch = gr.Button("Filtrar desvíos")
+            out_switch = gr.HTML()
+            btn_switch.click(
+                cb_switch,
+                inputs=[files, filtro_switch],
+                outputs=out_switch,
+            )
+
+        with gr.TabItem("Señales"):
+            filtro_signal = gr.Text(label="Filtro (AND/&  OR/|  NOT/!)")
+            btn_signal = gr.Button("Filtrar señales")
+            out_signal = gr.HTML()
+            btn_signal.click(
+                cb_signal,
+                inputs=[files, filtro_signal],
+                outputs=out_signal,
             )
 
         with gr.TabItem("Velocidades"):
@@ -537,9 +802,12 @@ with gr.Blocks(title="CRC Explorer") as demo:
                 outputs=[out_msg_vel, out_plot_vel, out_df_vel, out_csv_vel],
             )
 
+
     gr.Markdown("---\nSube uno o varios `envioMOM*.xml(.gz)` y explora. Las pestañas:\n"
                 "• **Trenes** – recorrido de circuitos\n"
                 "• **Alarmas** – filtra mensajes Alarm con AND/OR/NOT.\n"
+                "• **Desvíos** – filtra mensajes Switch (posición / enclavado).\n"
+                "• **Señales** – filtra mensajes Signal (estado de indicación).\n"
                 "• **Velocidades** – calcular perfiles de velocidad entre puntos seleccionados.")
     
 if __name__ == "__main__":

@@ -3,7 +3,9 @@
 Analizador interactivo de ficheros **envioMOM\*.xml(.gz)**.
 
 - **Trenes**: muestra el paso de trenes por circuitos TrackCircuit, con orden cronológico y gráfico interactivo.
-- **Alarmas**: lista de Alarm filtrable con operador lógico simple (`AND` / `OR` / `NOT`) y salida coloreada.
+- **Alarmas**: lista de Alarm filtrable con operadores lógicos (`AND` / `OR` / `NOT`) y salida coloreada.
+- **Desvíos**: lista de Switch con posición (+ / – / movimiento) y estado de enclavamiento, también filtrable con AND/OR/NOT.
+- **Señales**: lista de Signal que muestra la indicación actual de cada señal, filtrable con los mismos operadores lógicos.
 - **Velocidades**: calcula el perfil de velocidad a partir de un CSV de puntos de control.
 
 ---
@@ -28,17 +30,13 @@ docker run -p 7860:7860 crcxplorer
 ## Uso de la interfaz
 
 1. **Subir archivos** – arrastra uno o más `envioMOM*.xml` o `envioMOM*.xml.gz`.
-2. **Pestaña Trenes** – selecciona un tren de referencia.  
-   - El eje Y sigue exactamente el orden de circuitos de ese tren.  
-   - Los demás trenes aparecen superpuestos.
-3. **Pestaña Velocidades** – sube un CSV o pégalo en el cuadro; el contenido del fichero se copia automáticamente al texto para que puedas editarlo antes de calcular el perfil.
-4. **Pestaña Alarmas** – escribe filtros como:
+2. **Pestaña Trenes** – selecciona un tren de referencia para ver su recorrido y superponer el resto.
+3. **Pestaña Alarmas** – filtra mensajes *Alarm* con expresiones lógicas (`CTC & ROUTE`, `!ACK`, etc.).
+4. **Pestaña Desvíos** – filtra mensajes *Switch* y muestra hora, id, posición (derecha / izquierda / movimiento) y enclavado.
+5. **Pestaña Señales** – filtra mensajes *Signal* y muestra hora, id e indicación (aspecto) de cada señal.
+6. **Pestaña Velocidades** – sube un CSV o pégalo; se copia al cuadro para ajustarlo antes de calcular el perfil.
 
-   * `CTC & ROUTE`
-   * `MANDOS | RBC`
-   * `!ACK`
-
-   _Espacio → AND · `|` → OR · `!` → NOT_
+_Espacio → AND · `|` → OR · `!` → NOT_
 
 ---
 
