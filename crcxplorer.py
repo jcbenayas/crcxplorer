@@ -98,7 +98,7 @@ def _colorize_switch(row) -> str:
 
     widths = [30, 25, 20, 15]              # más separación
     parts  = [ts, sid, pos, enc]
-    colors = ["#ffa500", "#1e90ff", "#00ced1", "#adff2f"]
+    colors = ["#e45a1a", "#377eb8", "#4daf4a", "#984ea3"]
 
     def pad(t, w):
         txt = (t[:w]) if len(t) > w else t.ljust(w)
@@ -353,7 +353,7 @@ def _colorize_signal(row) -> str:
 
     widths = [30, 25, 40]
     parts  = [ts, sid, ind]
-    colors = ["#ffa500", "#1e90ff", "#4caf50"]
+    colors = ["#e45a1a", "#377eb8", "#4daf4a"]
 
     def pad(t, w):
         txt = (t[:w]) if len(t) > w else t.ljust(w)
@@ -703,9 +703,13 @@ def cb_csv_to_text(csv_file):
 # ──────────────────────────────────────────────────────────────────────────────
 with gr.Blocks(title="CRC Explorer") as demo:
     gr.Markdown("# CRCXplorer – Análisis de ficheros envioMOM")
-    # Ajuste visual para Plotly: modebar arriba‑izquierda y sin wrap
+    # Ajuste visual para Plotly: modebar arriba‑izquierda y sin wrap + ancho completo
     gr.HTML("""
     <style>
+    /* Ocupa todo el ancho disponible */
+    body .gradio-container {max-width: 100% !important;}
+
+    /* Ajustes específicos de Plotly */
     .modebar-container {left: 0 !important; right: auto !important;}
     .modebar {flex-wrap: nowrap !important;}
     </style>
